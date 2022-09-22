@@ -6,3 +6,4 @@ dags/**/*.pyc
 /db-data
 .DS_Store
 *.pyc
+docker/db-data

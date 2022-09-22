@@ -35,11 +35,13 @@ config = {
         "channels": True,
         "media": False
     },
+    "test_account": False,
     "root_dir": "telegram-scrape",
     "max_scrape_subs": 25,
-    "max_scrape_messages": False,
+    "max_scrape_messages": None,
     "save_subscriptions": True,
-    "save_messages": True
+    "save_messages": True,
+    "save_messages_chunk_size": 50000
 }
 
 
@@ -213,9 +215,24 @@ async def get_telegram_message_updates(client):
                 message_list.append(message_dict)
             print(min_id, max_id)
 
+            if config["save_messages"] and len(message_list) > config["save_messages_chunk_size"]:
+                from_id = min([i["id"] for i in message_list])
+                to_id = max([i["id"] for i in message_list])
+                key_name = f"messages/staging/{channel_id}-from-{from_id}-to-{to_id}.json"
+                string_data = json.dumps(message_list)
+                hook = S3Hook('s3_aaron')
+                hook.load_string(
+                    string_data,
+                    key=key_name,
+                    bucket_name=config["root_dir"],
+                    replace=False
+                )
+                message_list = []
+
         if config["save_messages"]:
-            ts = str(datetime.utcnow().timestamp()).split(".")[0]
-            key_name = f"messages/staging/{channel_id}-{ts}.json"
+            from_id = min([i["id"] for i in message_list])
+            to_id = max([i["id"] for i in message_list])
+            key_name = f"messages/staging/{channel_id}-from-{from_id}-to-{to_id}.json"
             string_data = json.dumps(message_list)
             hook = S3Hook('s3_aaron')
             hook.load_string(
