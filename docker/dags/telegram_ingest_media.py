@@ -27,24 +27,6 @@ default_args = {
     "owner": "Aaron Guzman",
 }
 
-config = {
-    "scrape_options": {
-        "groups": False,
-        "channels": True,
-        "media": False
-    },
-    "root_dir": "telegram-scrape",
-    "staging_dir": "messages/staging/",
-    "archive_dir": "messages/archive/",
-    "max_scrape_dialogs": False,
-    "max_scrape_messages": False,
-    "save_dialogs_to_db": False,
-    "save_dialogs_to_s3": False,
-    "save_messages": True,
-    "save_messages_chunk_size": 25000
-}
-
-
 def select_from_database(sql_query) -> [dict]:
     """SELECT FROM database and return query results
     """
@@ -71,243 +53,6 @@ def insert_into_database(table_name: str, record_list: [dict], ignore_dup_key: s
                 sql = f"INSERT INTO {table_name} ({col_names}) VALUES %s"
             psycopg2.extras.execute_values(curs, sql, insert_values, page_size=1000)
     return
-
-
-def get_updates_for_dialog_tables(dialog_data_list) -> dict:
-    """Parse and transform Telethon scraped data to be updated in database.
-    Returns:
-        dict: Dictionary containing keys for each table that is to be updated.
-        The value of each key is another dictionary containing keys names that
-        match the column names in each table.
-    """
-    dialog_tables = {
-        "dialogs": [],
-        "dialog_media": [],
-        "dialog_updates": [],
-    }
-    for dialog_data in dialog_data_list:
-        dialogs = {}
-        dialogs["id"] = dialog_data["entity"]["id"]
-        dialogs["access_hash"] = dialog_data["entity"]["access_hash"]
-        dialogs["is_user"] = dialog_data["is_user"]
-        dialogs["is_group"] = dialog_data["is_group"]
-        dialogs["is_channel"] = dialog_data["is_channel"]
-        dialogs["update_dt"] = datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S+0000")
-        dialog_tables["dialogs"].append(dialogs)
-
-        dialog_updates = {}
-        dialog_updates["dialog_id"] = dialog_data["entity"]["id"]
-        dialog_updates["title"] = dialog_data["entity"]["title"]
-        dialog_updates["broadcast"] = dialog_data["entity"]["broadcast"]
-        dialog_updates["verified"] = dialog_data["entity"]["verified"]
-        dialog_updates["megagroup"] = dialog_data["entity"]["megagroup"]
-        dialog_updates["restricted"] = dialog_data["entity"]["restricted"]
-        dialog_updates["scam"] = dialog_data["entity"]["scam"]
-        dialog_updates["has_link"] = dialog_data["entity"]["has_link"]
-        dialog_updates["slowmode_enabled"] = dialog_data["entity"]["slowmode_enabled"]
-        dialog_updates["fake"] = dialog_data["entity"]["fake"]
-        dialog_updates["gigagroup"] = dialog_data["entity"]["gigagroup"]
-        dialog_updates["noforwards"] = dialog_data["entity"]["noforwards"]
-        dialog_updates["username"] = dialog_data["entity"]["username"]
-        # dialog_updates["restriction_reason"] = dialog_data["entity"]["restriction_reason"] Error: 'is of type json[] but expression is of type text[]'
-        dialog_updates["participants_count"] = dialog_data["entity"]["participants_count"]
-        dialog_updates["update_dt"] = datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S+0000")
-
-        dialog_media = dialog_data["entity"]["photo"]
-        if "photo_id" in dialog_media:
-            dialog_media["dialog_id"] = dialog_data["entity"]["id"]
-            dialog_tables["dialog_media"].append(dialog_media)
-            dialog_updates["photo_id"] = dialog_media["photo_id"]
-        else:
-            dialog_media["dialog_id"] = None
-            dialog_updates["photo_id"] = None
-        dialog_tables["dialog_updates"].append(dialog_updates)
-    return dialog_tables
-
-
-def get_updates_for_message_tables(telegram_messages) -> (list, list):
-    """Transform Telegram messages data and create lists that
-    will be used to update the 'messages' and 'media' tables
-    in the telegram database.
-
-    The input for this function are the S3 files stored in the
-    telegram-scrape/messages/staging directory. This data is
-    parsed and split into two lists:
-        1. messages_table: Used to update the 'messages' table
-        2. media_table: Used to update the 'media' table
-    """
-    messages_table = [] # Updates for 'messages' table
-    media_attributes = [] # List of media attributes that need to be formatted before inserting into database
-    for i in range(len(telegram_messages)):
-        message = telegram_messages[i]
-        message_data = {}
-        try:
-            
-            message_data["dialog_id"] = message["dialog_id"]
-        except:
-            # renamed database column from subscription_id to dialog_id, older S3 files may still have previous name
-            message_data["dialog_id"] = message["subscription_id"]
-        message_data["message_id"] = message["id"]
-        message_data["date"] = message["date"]
-        message_data["from_id"] = message["from_id"]
-        message_data["message"] = message["message"]
-        message_data["pinned"] = message["pinned"]
-        message_data["post_author"] = message["post_author"]
-        message_data["private_url"] = message["private_url"]
-        message_data["public_url"] = message["public_url"]
-        message_data["sender_username"] = message["sender"]
-        reply_to = message["reply_to"]
-        if reply_to and "reply_to_msg_id" in reply_to:
-            message_data["reply_to_msg_id"] = reply_to["reply_to_msg_id"]
-        else:
-            message_data["reply_to_msg_id"] = None
-        if reply_to and "reply_to_peer_id" in reply_to:
-            message_data["reply_to_peer_id"] = reply_to["reply_to_peer_id"]
-        else:
-            message_data["reply_to_peer_id"] = None
-        fwd_from = message["fwd_from"]
-        if fwd_from:
-            if fwd_from["from_id"] and "channel_id" in fwd_from["from_id"]:
-                message_data["fwd_from_channel_id"] = fwd_from["from_id"]["channel_id"]
-            else:
-                message_data["fwd_from_channel_id"] = None
-            if fwd_from["from_id"] and "user_id" in fwd_from["from_id"]:
-                message_data["fwd_from_user_id"] = fwd_from["from_id"]["user_id"]
-            else:
-                message_data["fwd_from_user_id"] = None
-            message_data["fwd_from_date"] = message["fwd_from"]["date"]
-            message_data["fwd_from_from_name"] = message["fwd_from"]["from_name"]
-            message_data["fwd_from_message_id"] = message["fwd_from"]["channel_post"]
-            message_data["fwd_from_post_author"] = message["fwd_from"]["post_author"]
-        else:
-            message_data["fwd_from_channel_id"] = None
-            message_data["fwd_from_user_id"] = None
-            message_data["fwd_from_date"] = None
-            message_data["fwd_from_from_name"] = None
-            message_data["fwd_from_message_id"] = None
-            message_data["fwd_from_post_author"] = None
-
-        # Add webpage media to 'message' and extract any media to be placed in the 'message_media' table
-        if message["media"] and "webpage" in message["media"] and "url" in message["media"]["webpage"]:
-            webpage_data = message["media"]["webpage"]
-            message_data["webpage_url"] = webpage_data["url"]
-            message_data["webpage_type"] = webpage_data["type"]
-            message_data["webpage_site_name"] = webpage_data["site_name"]
-            message_data["webpage_title"] = webpage_data["title"]
-            message_data["webpage_description"] = webpage_data["description"]
-            message_data["author"] = webpage_data["author"]
-            if "photo" in webpage_data and webpage_data["photo"] and "id" in webpage_data["photo"]:
-                message_data["webpage_photo_media_id"] = webpage_data["photo"]["id"]
-                webpage_data["photo"]["media_type"] = "webpage_photo"
-                webpage_data["photo"]["message_id"] = message["id"]
-                try:
-                    webpage_data["photo"]["dialog_id"] = message["dialog_id"]
-                except:
-                # renamed database column from subscription_id to dialog_id, older files may still have previous name
-                    webpage_data["photo"]["dialog_id"] = message["subscription_id"]
-                media_attributes.append(message["media"]["webpage"]["photo"])
-            else:
-                message_data["webpage_photo_media_id"] = None
-
-            if "document" in webpage_data and webpage_data["document"] and "id" in webpage_data["document"]:
-                message_data["webpage_document_media_id"] = webpage_data["document"]["id"]
-                webpage_data["document"]["media_type"] = "webpage_document"
-                webpage_data["document"]["message_id"] = message["id"]
-                try:
-                    webpage_data["document"]["dialog_id"] = message["dialog_id"]
-                except:
-                # renamed database column from subscription_id to dialog_id, older files may still have previous name
-                    webpage_data["document"]["dialog_id"] = message["subscription_id"]
-                media_attributes.append(message["media"]["webpage"]["document"])
-            else:
-                message_data["webpage_document_media_id"] = None
-        else:
-            message_data["webpage_url"] = None
-            message_data["webpage_type"] = None
-            message_data["webpage_site_name"] = None
-            message_data["webpage_title"] = None
-            message_data["webpage_description"] = None
-            message_data["author"] = None
-            message_data["webpage_photo_media_id"] = None
-            message_data["webpage_document_media_id"] = None
-
-        if message["media"] and "photo" in message["media"]:
-            message_data["media_id"] = message["media"]["photo"]["id"]
-            message["media"]["photo"]["media_type"] = "photo"
-            message["media"]["photo"]["message_id"] = message["id"]
-            try:
-                message["media"]["photo"]["dialog_id"] = message["dialog_id"]
-            except:
-            # renamed database column from subscription_id to dialog_id, older files may still have previous name
-                message["media"]["photo"]["dialog_id"] = message["subscription_id"]
-            media_attributes.append(message["media"]["photo"])
-
-        elif message["media"] and "document" in message["media"]:
-            message_data["media_id"] = message["media"]["document"]["id"]
-            message["media"]["document"]["media_type"] = "document"
-            message["media"]["document"]["message_id"] = message["id"]
-            try:
-                message["media"]["document"]["dialog_id"] = message["dialog_id"]
-            except:
-            # renamed database column from subscription_id to dialog_id, older files may still have previous name
-                message["media"]["document"]["dialog_id"] = message["subscription_id"]
-            media_attributes.append(message["media"]["document"])
-        else:
-            message_data["media_id"] = None
-        messages_table.append(message_data)
-
-    return messages_table, media_attributes
-
-
-def standardize_media_attributes(media_attributes) -> list:
-    media_table = []
-    for i in range(len(media_attributes)):
-        m = {}
-        attributes = media_attributes[i].get("attributes")
-        if attributes:
-            duration_key = [a for a in attributes if "duration" in a]
-            if duration_key:
-                m["media_duration"] = duration_key[0]["duration"]
-            else:
-                m["media_duration"] = None
-            video_width_key = [a for a in attributes if "w" in a]
-            if video_width_key:
-                m["video_width"] = video_width_key[0]["w"]
-            else:
-                m["video_width"] = None
-            video_height_key = [a for a in attributes if "h" in a]
-            if video_height_key:
-                m["video_height"] = video_height_key[0]["h"]
-            else:
-                m["video_height"] = None
-            file_name_key = [a for a in attributes if "file_name" in a]
-            if file_name_key:
-                m["media_filename"] = file_name_key[0]["file_name"]
-            else:
-                m["media_filename"] = None
-        else:
-            m["media_duration"] = None
-            m["video_width"] = None
-            m["video_height"] = None
-            m["media_filename"] = None
-        m["media_id"] = media_attributes[i].get("id")
-        m["access_hash"] = media_attributes[i].get("access_hash")
-        m["file_reference"] = media_attributes[i].get("file_reference")
-        m["date"] = media_attributes[i].get("date")
-        m["dc_id"] = media_attributes[i].get("dc_id")
-        m["has_stickers"] = media_attributes[i].get("has_stickers")
-        m["mime_type"] = media_attributes[i].get("mime_type")
-        m["size"] = media_attributes[i].get("size")
-        m["media_type"] = media_attributes[i].get("media_type")
-        m["message_id"] = media_attributes[i].get("message_id")
-        try:
-            m["dialog_id"] = media_attributes[i]["dialog_id"]
-            m["dialog_message_id"] = str(media_attributes[i]["dialog_id"]) + str(media_attributes[i].get("message_id"))
-        except:
-            m["dialog_id"] = media_attributes[i]["subscription_id"]
-            m["dialog_message_id"] = str(media_attributes[i]["subscription_id"]) + str(media_attributes[i].get("message_id"))
-        media_table.append(m)
-    return media_table
 
 
 async def get_newest_message_id_from_telegram_api(dialog_name, client):
@@ -520,7 +265,7 @@ async def get_telegram_message_updates(client):
     start_date=days_ago(2),
     tags=['telegram']
 )
-def telegram_ingest():
+def telegram_ingest_media():
     """
     ### Telegram Pipeline
     This DAG using the TaskFlow API to create a Telegram pipeline.
@@ -618,8 +363,7 @@ def telegram_ingest():
     first = upload_staging_files_to_database()
     second = download_telegram_messages()
     third = download_telegram_media_files()
-    fourth = upload_staging_files_to_database()
-    first >> second >> third >> fourth
+    first >> second >> third
 
 
-telegram_ingest = telegram_ingest()
+telegram_ingest_media = telegram_ingest_media()
