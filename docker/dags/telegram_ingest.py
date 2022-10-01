@@ -11,7 +11,7 @@ from psycopg2.extras import RealDictCursor
 from telethon.sync import TelegramClient
 from telethon.utils import get_display_name
 from telethon.sessions import StringSession
-
+from telethon.tl.types import InputPeerChannel
 import logging
 # logging.basicConfig(level=logging.INFO)
 logging.basicConfig(level=logging.DEBUG)
@@ -29,7 +29,7 @@ default_args = {
 
 config = {
     "scrape_options": {
-        "groups": False,
+        "groups": True,
         "channels": True,
         "media": False
     },
@@ -423,13 +423,18 @@ async def get_telegram_message_updates(client):
     """
     db_dialogs = select_from_database(sql_query)
     for api_dialog_data in api_dialog_data_list:
+
         dialog_name = api_dialog_data["name"]
         dialog_username = api_dialog_data["entity"].get("username")
         dialog_id = api_dialog_data["entity"]["id"]
         db_dialog_data_list = [i for i in db_dialogs if i["id"] == dialog_id]
         db_dialog_data = db_dialog_data_list[0]
+
         if db_dialog_data["active"] is False:
             continue
+        db_dialog_id = db_dialog_data["id"]
+        db_dialog_access_hash = int(db_dialog_data["access_hash"])
+        dialog_entity = await client.get_entity(InputPeerChannel(db_dialog_id, db_dialog_access_hash))
 
         logging.info(f"Starting message scrape for: '{dialog_name}', '{dialog_username}' | '{dialog_id}'")
         sql_query = f"""
@@ -440,14 +445,14 @@ async def get_telegram_message_updates(client):
         last_db_message_id = select_from_database(sql_query)[0].get("max")
         if last_db_message_id is None:
             last_db_message_id = 1
-        scrape_to = await get_newest_message_id_from_telegram_api(dialog_name, client)
+        scrape_to = await get_newest_message_id_from_telegram_api(dialog_entity, client)
         if scrape_to is None:
             logging.info(f"No messages found for diolog: '{dialog_username}' | '{dialog_id}'")
             continue
         if last_db_message_id >= scrape_to:
             logging.info("Database is up to date. No scrape needed.")
             continue
-        scrape_from = 1
+        scrape_from = 0
         limit = 1000
         if config["max_scrape_messages"]:
             limit = config["max_scrape_messages"]
@@ -461,7 +466,7 @@ async def get_telegram_message_updates(client):
         logging.info(f"Scrape range for dialog_id '{dialog_id}' from {scrape_from} to {scrape_to}")
         message_list = []
         while scrape_from < scrape_to:
-            async for message in client.iter_messages(dialog_name, min_id=scrape_from, reverse=True, limit=limit):
+            async for message in client.iter_messages(dialog_entity, min_id=scrape_from, reverse=True, limit=limit):
                 # https://docs.telethon.dev/en/stable/modules/custom.html#telethon.tl.custom.message.Message
                 scrape_from = message.id
                 if message.media:
@@ -614,6 +619,9 @@ def telegram_ingest():
         """
         logging.info("Step 3!!! This means all steps ran sucessfully!")
         return
+
+
+
 
     first = upload_staging_files_to_database()
     second = download_telegram_messages()
