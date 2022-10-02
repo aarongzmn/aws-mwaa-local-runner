@@ -207,6 +207,7 @@ async def main(client):
                     curs.execute(update_sql)
                 time.sleep(60)
             continue
+    return
 
 
 @dag(
