@@ -211,7 +211,7 @@ async def main(client):
 
 @dag(
     default_args=default_args,
-    schedule_interval=None,
+    schedule_interval="0 0 * * *",
     start_date=days_ago(2),
     tags=['telegram']
 )

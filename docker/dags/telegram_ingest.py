@@ -41,7 +41,7 @@ config = {
     "save_dialogs_to_db": True,
     "save_dialogs_to_s3": False,
     "save_messages_to_db": True,
-    "save_messages_to_s3": False,
+    "save_messages_to_s3": True,
     "save_messages": True,
     "save_messages_chunk_size": 25000
 }
@@ -233,7 +233,7 @@ def get_updates_for_message_tables(telegram_messages) -> (list, list):
             message_data["webpage_photo_media_id"] = None
             message_data["webpage_document_media_id"] = None
 
-        if message["media"] and "photo" in message["media"]:
+        if message["media"] and "photo" in message["media"] and message["media"]["photo"]:
             message_data["media_id"] = message["media"]["photo"]["id"]
             message["media"]["photo"]["media_type"] = "photo"
             message["media"]["photo"]["message_id"] = message["id"]
@@ -474,8 +474,7 @@ async def get_telegram_message_updates(client):
         logging.info(f"Scrape range for dialog_id '{dialog_id}' from {scrape_from} to {scrape_to}")
         message_list = []
         while scrape_from < scrape_to:
-            async for message in client.iter_messages(dialog_entity, min_id=scrape_from, reverse=True):
-            # async for message in client.iter_messages(dialog_entity, min_id=scrape_from, reverse=True, limit=limit):
+            async for message in client.iter_messages(dialog_entity, min_id=scrape_from, reverse=True, limit=limit):
                 # https://docs.telethon.dev/en/stable/modules/custom.html#telethon.tl.custom.message.Message
                 scrape_from = message.id
                 if message.media:
@@ -530,7 +529,7 @@ async def get_telegram_message_updates(client):
 
 @dag(
     default_args=default_args,
-    schedule_interval=None,
+    schedule_interval="0 12 * * *",
     start_date=days_ago(2),
     tags=['telegram']
 )
