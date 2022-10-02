@@ -474,7 +474,8 @@ async def get_telegram_message_updates(client):
         logging.info(f"Scrape range for dialog_id '{dialog_id}' from {scrape_from} to {scrape_to}")
         message_list = []
         while scrape_from < scrape_to:
-            async for message in client.iter_messages(dialog_entity, min_id=scrape_from, reverse=True, limit=limit):
+            async for message in client.iter_messages(dialog_entity, min_id=scrape_from, reverse=True):
+            # async for message in client.iter_messages(dialog_entity, min_id=scrape_from, reverse=True, limit=limit):
                 # https://docs.telethon.dev/en/stable/modules/custom.html#telethon.tl.custom.message.Message
                 scrape_from = message.id
                 if message.media:
