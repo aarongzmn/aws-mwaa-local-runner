@@ -38,8 +38,10 @@ config = {
     "archive_dir": "messages/archive/",
     "max_scrape_dialogs": False,
     "max_scrape_messages": False,
-    "save_dialogs_to_db": False,
+    "save_dialogs_to_db": True,
     "save_dialogs_to_s3": False,
+    "save_messages_to_db": True,
+    "save_messages_to_s3": False,
     "save_messages": True,
     "save_messages_chunk_size": 25000
 }
@@ -369,16 +371,17 @@ async def get_telegram_message_updates(client):
     st = time.time()
     account_dialog_list = [todict(i) async for i in client.iter_dialogs()]
 
-    scrape_options = config["scrape_options"]
-    if scrape_options["groups"] is False and scrape_options["channels"]:
-        # Only scrape 'channel' dialogs
-        api_dialog_data_list = [i for i in account_dialog_list if not i["is_group"] and i["is_channel"]]
-    elif scrape_options["groups"] and scrape_options["channels"] is False:
-        # Only scrape 'group' dialogs
-        api_dialog_data_list = [i for i in account_dialog_list if i["is_group"]]
-    else:
-        # Scrape both channels and groups dialogs
-        api_dialog_data_list = [i for i in account_dialog_list if not i["is_user"]]
+    # scrape_options = config["scrape_options"]
+    # if scrape_options["groups"] is False and scrape_options["channels"]:
+    #     # Only scrape 'channel' dialogs
+    #     api_dialog_data_list = [i for i in account_dialog_list if not i["is_group"] and i["is_channel"]]
+    # elif scrape_options["groups"] and scrape_options["channels"] is False:
+    #     # Only scrape 'group' dialogs
+    #     api_dialog_data_list = [i for i in account_dialog_list if i["is_group"]]
+    # else:
+    #     # Scrape both channels and groups dialogs
+    #     api_dialog_data_list = [i for i in account_dialog_list if not i["is_user"]]
+    api_dialog_data_list = [i for i in account_dialog_list if not i["is_user"]]
 
     if config['max_scrape_dialogs']:
         logging.warning(f"Scrape settings set to scrape max {config['max_scrape_dialogs']} dialogs.")
@@ -391,37 +394,42 @@ async def get_telegram_message_updates(client):
             updates_for_dialog_tables = get_updates_for_dialog_tables(api_dialog_data_list)
             if len(updates_for_dialog_tables["dialogs"]) > 0:
                 insert_into_database("dialogs", updates_for_dialog_tables["dialogs"], ignore_dup_key="id")
+            if len(updates_for_dialog_tables["dialog_media"]) > 0:
+                insert_into_database("dialog_media", updates_for_dialog_tables["dialog_media"], ignore_dup_key="photo_id")
             if len(updates_for_dialog_tables["dialog_updates"]) > 0:
                 insert_into_database("dialog_updates", updates_for_dialog_tables["dialog_updates"])
-            if len(updates_for_dialog_tables["dialog_media"]) > 0:
-                insert_into_database("dialog_media", updates_for_dialog_tables["dialog_media"])
         except:
-            logging.info(api_dialog_data_list.keys())
             logging.info(len(updates_for_dialog_tables["dialogs"]))
             logging.info(updates_for_dialog_tables["dialogs"].keys())
 
-    if config["save_dialogs_to_s3"]:
-        ts = str(datetime.utcnow().timestamp()).split(".")[0]
-        key_name = f"dialogs/{ts}.json"
-        json_bytes = json.dumps(api_dialog_data_list).encode('utf-8')
-        hook = S3Hook('s3_aaron')
-        hook.load_file_obj(
-            json_bytes,
-            key_name,
-            bucket_name=config["root_dir"],
-            replace=False
-        )
+    if config["save_messages_to_s3"] is False:
+        logging.warning(f"Scrape settings set to 'save_messages_to_s3'={config['save_messages_to_s3']}, this will disable saving message files to S3.")
+
+    scrape_options = config["scrape_options"]
+    if scrape_options["groups"] is False and scrape_options["channels"]:
+        # Scrape Channels, NOT Groups and NOT Users
+        sql_query = """
+        SELECT *
+        FROM dialogs
+        WHERE is_channel is True
+            AND is_group is False
+        """
+    elif scrape_options["groups"] and scrape_options["channels"] is False:
+        # Scrape Groups, NOT Channels and NOT Users
+        sql_query = """
+        SELECT *
+        FROM dialogs
+        WHERE is_group is True
+        """
     else:
-        logging.warning(f"Scrape settings set to 'save_dialogs_to_s3'={config['save_dialogs_to_s3']}, this will disable saving dialog files.")
-
-    if config["save_messages"] is False:
-        logging.warning(f"Scrape settings set to 'save_messages'={config['save_messages']}, this will disable saving dialog files.")
-
-    sql_query = """
-    SELECT *
-    FROM dialogs
-    """
+        # Scrape Channels and Groups, NOT Users
+        sql_query = """
+        SELECT *
+        FROM dialogs
+        WHERE is_user is False
+        """
     db_dialogs = select_from_database(sql_query)
+
     for api_dialog_data in api_dialog_data_list:
 
         dialog_name = api_dialog_data["name"]
@@ -485,7 +493,7 @@ async def get_telegram_message_updates(client):
                 message_dict["public_url"] = public_url
                 message_list.append(message_dict)
 
-            if config["save_messages"] and len(message_list) > config["save_messages_chunk_size"]:
+            if config["save_messages_to_s3"] and len(message_list) > config["save_messages_chunk_size"]:
                 from_id = min([i["id"] for i in message_list])
                 to_id = max([i["id"] for i in message_list])
                 key_name = f"messages/staging/{dialog_id}-from-{from_id}-to-{to_id}-({len(message_list)}).json"
@@ -500,7 +508,7 @@ async def get_telegram_message_updates(client):
                 )
                 message_list = []
 
-        if config["save_messages"]:
+        if config["save_messages_to_s3"]:
             from_id = min([i["id"] for i in message_list])
             to_id = max([i["id"] for i in message_list])
             key_name = f"messages/staging/{dialog_id}-from-{from_id}-to-{to_id}-({len(message_list)}).json"
@@ -560,11 +568,12 @@ def telegram_ingest():
             messages_table, media_attributes = get_updates_for_message_tables(response_dict)
             media_table = standardize_media_attributes(media_attributes)
             if len(media_table) > 0:
-                insert_into_database("messages", messages_table)
-                logging.info("Inserted new records into 'messages' table.")
-            if len(media_table) > 0:
                 insert_into_database("messages_media", media_table, ignore_dup_key="media_id")
                 logging.info("Inserted new records into 'media_table' table.")
+
+            if len(messages_table) > 0:
+                insert_into_database("messages", messages_table)
+                logging.info("Inserted new records into 'messages' table.")
 
             # Move file from 'staging' dir to 'archive' dir
             try:
